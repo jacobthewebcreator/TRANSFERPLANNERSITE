@@ -49,6 +49,14 @@ const ALL_TERMS = [
 ];
 
 // --- HELPERS ---
+async function parseJsonResponse(res) {
+  try {
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
 function getMajorCategory(majorName) {
   for (const [cat, majors] of Object.entries(MAJOR_CATEGORIES)) {
     if (majors.includes(majorName)) return cat;
@@ -108,6 +116,8 @@ export default function App() {
   const [subscriptionId, setSubscriptionId] = useState(null);
   const [trialEnd, setTrialEnd] = useState(null);
   const [selectedMajor, setSelectedMajor] = useState('Computer Science B.S.');
+  const [isMajorModalOpen, setIsMajorModalOpen] = useState(false);
+  const [pendingMajor, setPendingMajor] = useState('Computer Science B.S.');
   const [aiApiKey, setAiApiKey] = useState('');
   const [aiKeyInput, setAiKeyInput] = useState(''); // local input before saving
 
@@ -247,19 +257,20 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId: user.uid, email: user.email || '' }),
       });
+      const data = await parseJsonResponse(res);
       if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || 'Server error');
+        throw new Error(data?.error || `Server error (${res.status})`);
       }
-      const data = await res.json();
-      if (data.url) {
-        window.location.href = data.url;
-      } else {
+      if (!data?.url) {
         throw new Error('No checkout URL returned');
       }
+      window.location.href = data.url;
     } catch (e) {
       console.error('Stripe error:', e);
-      setStripeError(e.message || 'Could not start checkout. Check your Stripe environment variables.');
+      const friendly = e.message === 'Failed to fetch'
+        ? 'Could not reach the payment server. Is the API running?'
+        : e.message;
+      setStripeError(friendly || 'Could not start checkout. Check your Stripe environment variables.');
     } finally {
       setIsLoadingCheckout(false);
     }
@@ -274,9 +285,13 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ subscriptionId }),
       });
-      if (!res.ok) throw new Error('Server error');
+      if (!res.ok) {
+        const data = await parseJsonResponse(res);
+        throw new Error(data?.error || `Server error (${res.status})`);
+      }
       alert('Subscription canceled. Access continues until period end.');
-    } catch {
+    } catch (e) {
+      console.error('Cancel subscription error:', e);
       alert('Error canceling. Please contact support.');
     }
   };
@@ -374,6 +389,20 @@ Answer the student's question using their real data above.`;
   const handleMajorChange = (major) => {
     setSelectedMajor(major);
     saveUserData({ selectedMajor: major });
+  };
+
+  const openMajorModal = () => {
+    setPendingMajor(selectedMajor);
+    setIsMajorModalOpen(true);
+  };
+
+  const confirmMajorChange = () => {
+    handleMajorChange(pendingMajor);
+    setIsMajorModalOpen(false);
+  };
+
+  const cancelMajorChange = () => {
+    setIsMajorModalOpen(false);
   };
 
   const handleSaveApiKey = () => {
@@ -524,6 +553,42 @@ Answer the student's question using their real data above.`;
       {currentView === 'app' && (
         <div className="flex w-full h-full overflow-hidden">
 
+          {/* Change Major Modal */}
+          {isMajorModalOpen && (
+            <div className="fixed inset-0 bg-slate-950/50 backdrop-blur-sm z-[60] flex items-center justify-center p-6" onClick={cancelMajorChange}>
+              <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md p-6 space-y-5" onClick={e => e.stopPropagation()}>
+                <div>
+                  <h3 className="text-lg font-extrabold text-slate-900">Change Target Major</h3>
+                  <p className="text-xs text-slate-400 mt-1">Switching majors updates which prerequisites and TAG requirements are tracked. Your logged courses stay the same.</p>
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1.5">Select New Major</label>
+                  <select
+                    className="w-full px-3 py-2.5 border border-slate-200 rounded-xl bg-slate-50 text-sm font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    value={pendingMajor}
+                    onChange={e => setPendingMajor(e.target.value)}
+                  >
+                    {Object.entries(MAJOR_CATEGORIES).map(([cat, majors]) => (
+                      <optgroup key={cat} label={cat}>
+                        {majors.map(m => <option key={m} value={m}>{m}</option>)}
+                      </optgroup>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex gap-3 justify-end pt-2">
+                  <button onClick={cancelMajorChange} className="px-4 py-2.5 rounded-xl text-sm font-bold text-slate-500 hover:bg-slate-50 transition-all">Cancel</button>
+                  <button
+                    onClick={confirmMajorChange}
+                    disabled={pendingMajor === selectedMajor}
+                    className="px-5 py-2.5 rounded-xl text-sm font-bold bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                  >
+                    Save Major
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Sidebar */}
           <aside className={`fixed inset-y-0 left-0 z-50 w-64 bg-white border-r border-slate-200 flex flex-col transform transition-transform duration-300 md:relative md:translate-x-0 ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'}`}>
             <div className="h-16 border-b border-slate-100 px-6 flex items-center justify-between shrink-0">
@@ -533,18 +598,11 @@ Answer the student's question using their real data above.`;
 
             {/* Major selector */}
             <div className="p-4 border-b border-slate-100 shrink-0">
-              <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1.5">Target Major</label>
-              <select
-                className="w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-xs font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                value={selectedMajor}
-                onChange={e => handleMajorChange(e.target.value)}
-              >
-                {Object.entries(MAJOR_CATEGORIES).map(([cat, majors]) => (
-                  <optgroup key={cat} label={cat}>
-                    {majors.map(m => <option key={m} value={m}>{m}</option>)}
-                  </optgroup>
-                ))}
-              </select>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="block text-[10px] font-bold text-slate-400 uppercase">Target Major</label>
+                <button onClick={openMajorModal} className="text-[10px] font-bold text-indigo-600 hover:text-indigo-700 hover:underline">Change</button>
+              </div>
+              <p className="w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-xs font-bold text-slate-700 truncate">{selectedMajor}</p>
               <div className="mt-2 flex items-center gap-2">
                 <div className="flex-1 bg-slate-100 rounded-full h-1.5 overflow-hidden">
                   <div className="bg-indigo-500 h-full rounded-full transition-all duration-500" style={{ width: `${completionStats.percent}%` }} />
@@ -606,11 +664,6 @@ Answer the student's question using their real data above.`;
                 <h2 className="text-lg font-black text-slate-800">{activeTab}</h2>
               </div>
               <div className="flex items-center gap-3">
-                {!aiApiKey && (
-                  <button onClick={() => setActiveTab('Settings')} className="text-xs text-amber-600 bg-amber-50 border border-amber-200 px-3 py-1.5 rounded-lg font-bold flex items-center gap-1 hover:bg-amber-100 transition-all">
-                    <Key className="w-3.5 h-3.5" /> Add AI Key
-                  </button>
-                )}
                 {isSaving && <span className="text-xs font-bold text-slate-400 flex items-center gap-1"><Check className="w-4 h-4 text-emerald-500" />Saved</span>}
               </div>
             </header>
@@ -888,36 +941,7 @@ Answer the student's question using their real data above.`;
               {/* ── SETTINGS ── */}
               {activeTab === 'Settings' && (
                 <div className="space-y-6 max-w-lg">
-                  {/* AI Key */}
-                  <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-4">
-                    <h3 className="font-bold text-slate-800 flex items-center gap-2"><Sparkles className="w-4 h-4 text-purple-500" /> AI Advisor (Gemini)</h3>
-                    <div className="space-y-2">
-                      <p className="text-xs text-slate-500">
-                        Add your free Gemini API key to enable the AI chat advisor. Get one at{' '}
-                        <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="text-indigo-500 hover:underline font-semibold">aistudio.google.com</a>
-                      </p>
-                      <div className="flex gap-2">
-                        <input
-                          type="password"
-                          placeholder="AIzaSy..."
-                          className="flex-1 px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                          value={aiKeyInput}
-                          onChange={e => setAiKeyInput(e.target.value)}
-                        />
-                        <button
-                          onClick={handleSaveApiKey}
-                          className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-4 py-2 rounded-xl text-xs transition-all"
-                        >
-                          Save
-                        </button>
-                      </div>
-                      {aiApiKey && (
-                        <p className="text-xs text-emerald-600 font-bold flex items-center gap-1">
-                          <Check className="w-3.5 h-3.5" /> API key saved — AI advisor is active
-                        </p>
-                      )}
-                    </div>
-                  </div>
+                  
 
                   {/* Subscription */}
                   <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-4">
